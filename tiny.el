@@ -104,8 +104,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl))
+(require 'cl-lib)
 (require 'help-fns)
 (require 'org)
 
@@ -130,13 +129,14 @@ At the moment, only `tiny-mapconcat' is supported.
     (when e
       (goto-char tiny-beg)
       (delete-region tiny-beg tiny-end)
-      (insert (eval e t)))))
+      (insert (eval e t))
+      t)))
 
 (defun tiny-setup-default ()
   "Setup shortcuts."
   (global-set-key (kbd "C-;") 'tiny-expand))
 
-(defun tiny--strip-\n (str)
+(defun tiny--strip-newlines (str)
   (replace-regexp-in-string "\\\\n" "\n" str))
 
 (defun tiny-mapconcat ()
@@ -166,23 +166,23 @@ Defaults are used in place of null values."
              (seq (number-sequence n0 n2 (if (>= n0 n2) -1 1))))
         `(mapconcat (lambda (x)
                       (let ((lst ,expr))
-                        (format ,(tiny--strip-\n fmt)
+                        (format ,(tiny--strip-newlines fmt)
                                 ,@(mapcar (lambda (x)
                                             (if x
                                                 (read x)
                                               (if (>= (1+ idx) n-have)
                                                   'x
-                                                `(nth ,(incf idx) lst))))
+                                                `(nth ,(cl-incf idx) lst))))
                                           (cdr tes)))))
                     ',seq
-                    ,(tiny--strip-\n s1))))))
+                    ,(tiny--strip-newlines s1))))))
 
 (defconst tiny-format-str
   (let ((flags "[+ #-0]\\{0,1\\}")
         (width "[0-9]*")
         (precision "\\(?:\\.[0-9]+\\)?")
         (character "[sdoxXefgcS]?"))
-    (format "\\(%s%s%s%s\\)("
+    (format "\\(%s%s%s%s\\)([^)]+)"
             flags width precision character)))
 
 (defun tiny-extract-sexps (str)
@@ -199,12 +199,12 @@ Each element of FORMS corresponds to a `format'-style % form in STR.
           (setq start (1+ beg))
 
           (cond ((= ?% (aref str (1+ beg)))
-                 (incf start))
+                 (cl-incf start))
 
                 ((and (eq beg (string-match tiny-format-str str beg))
                       (setq fexp (match-string-no-properties 1 str)))
-                 (incf beg (length fexp))
-                 (destructuring-bind (_sexp . end)
+                 (cl-incf beg (length fexp))
+                 (cl-destructuring-bind (_sexp . end)
                      (read-from-string str beg)
                    (push
                     (replace-regexp-in-string "(date" "(tiny-date"
@@ -250,22 +250,30 @@ Return nil if nothing was matched, otherwise
                  (setq n2 n1
                        n1 nil)
                  (throw 'done t)))
-              ;; else capture the whole thing
-              ((looking-back "\\bm\\([^%|\n]*[0-9][^\n]*\\)"
+              ;; else capture separator, end number, formatter
+              ((looking-back "\\bm\\([^%|\n0-9]*\\)\\([0-9]+\\)\\([^\n]*\\)"
                              (line-beginning-position))
-               (setq str (match-string-no-properties 1)
-                     tiny-beg (match-beginning 0)
-                     tiny-end (match-end 0))
-               (when (zerop (length str))
-                 (throw 'done nil)))
+               (setq tiny-beg (match-beginning 0))
+               (setq tiny-end (match-end 0))
+               (let ((separator (match-string-no-properties 1))
+                     (end-numbr (match-string-no-properties 2))
+                     (formatter (match-string-no-properties 3)))
+                 (if (or (string-match-p "[%|]" formatter)
+                         (string= "" formatter))
+                     (progn
+                       (setq str (concat separator end-numbr formatter))
+                       (when (zerop (length str))
+                         (throw 'done nil)))
+                   (throw 'done nil))))
               (t (throw 'done nil)))
             ;; at this point, `str' should be either [sep]<num>[expr][fmt]
             ;; or [expr][fmt]
             ;;
             ;; First, try to match [expr][fmt]
-            (string-match "^\\(.*?\\)|?\\(%.*\\)?$" str)
-            (setq expr (match-string-no-properties 1 str))
-            (setq fmt (match-string-no-properties 2 str))
+            (when (or (string-match "^\\([^|]*\\)|\\(.*\\)?$" str)
+                      (string-match "^\\(.*?\\)\\(%.*\\)?$" str))
+              (setq expr (match-string-no-properties 1 str))
+              (setq fmt (match-string-no-properties 2 str)))
             ;; If it's a valid expression, we're done
             (when (setq expr (tiny-tokenize expr))
               (setq n2 n1
@@ -316,13 +324,13 @@ Return nil if nothing was matched, otherwise
                      (error "Unexpected \" \"")))
                   ;; special syntax to read chars
                   ((string= s "?")
-                   (setq s (format "%s" (read (substring str i (incf j)))))
+                   (setq s (format "%s" (read (substring str i (cl-incf j)))))
                    (push s out)
                    (push " " out))
                   ((string= s ")")
                    ;; expect a close paren only if it's necessary
                    (if (>= n-paren 0)
-                       (decf n-paren)
+                       (cl-decf n-paren)
                      (error "Unexpected \")\""))
                    (when (string= (car out) " ")
                      (pop out))
@@ -332,7 +340,7 @@ Return nil if nothing was matched, otherwise
                    ;; open paren is used sometimes
                    ;; when there are numbers in the expression
                    (setq expect-fun t)
-                   (incf n-paren)
+                   (cl-incf n-paren)
                    (push "(" out))
                   ((progn (setq sym (intern-soft s))
                           (cond
@@ -344,7 +352,7 @@ Return nil if nothing was matched, otherwise
                              ;; (when (zerop n-paren) (push "(" out))
                              (unless (equal (car out) "(")
                                (push "(" out)
-                               (incf n-paren))
+                               (cl-incf n-paren))
                              t)
                             ((and sym (boundp sym) (not expect-fun))
                              t)))
@@ -357,7 +365,7 @@ Return nil if nothing was matched, otherwise
                      (push " " out)
                      (setq j (+ i (length num-s)))))
                   (t
-                   (incf j)
+                   (cl-incf j)
                    nil))
             (setq i j)
             (setq j (1+ i))))
